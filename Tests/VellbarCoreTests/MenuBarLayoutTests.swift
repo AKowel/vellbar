@@ -3,9 +3,9 @@ import CoreGraphics
 import Foundation
 @testable import VellbarCore
 
-private func item(_ id: String, pid: Int32, owner: String, x: CGFloat, w: CGFloat = 24) -> MenuBarItem {
-    MenuBarItem(id: id, ownerPID: pid, ownerName: owner,
-                frame: CGRect(x: x, y: 0, width: w, height: 24))
+private func item(_ id: UInt32, x: CGFloat, w: CGFloat = 24, h: CGFloat = 24,
+                  name: String? = nil) -> MenuBarItem {
+    MenuBarItem(windowID: id, frame: CGRect(x: x, y: 0, width: w, height: h), name: name)
 }
 
 @Suite("Menu bar ordering")
@@ -13,85 +13,64 @@ struct OrderingTests {
 
     @Test("visual order runs right to left, the way the eye reads the bar")
     func visualOrder() {
-        let items = [item("a", pid: 1, owner: "A", x: 100),
-                     item("c", pid: 3, owner: "C", x: 300),
-                     item("b", pid: 2, owner: "B", x: 200)]
-        #expect(MenuBarLayout.inVisualOrder(items).map(\.id) == ["c", "b", "a"])
-    }
-
-    @Test("system-drawn items are left alone")
-    func systemItemsExcluded() {
-        let items = [item("clock", pid: 9, owner: "Control Center", x: 400),
-                     item("mine", pid: 1, owner: "Dropbox", x: 200)]
-        let managed = MenuBarLayout.manageable(items, excludingPID: 77)
-        #expect(managed.map(\.id) == ["mine"])
+        let items = [item(1, x: 100), item(3, x: 300), item(2, x: 200)]
+        #expect(MenuBarLayout.inVisualOrder(items).map(\.windowID) == [3, 2, 1])
     }
 
     @Test("our own items never appear in our own list")
     func ownItemsExcluded() {
-        let items = [item("ours", pid: 77, owner: "Vellbar", x: 400),
-                     item("theirs", pid: 1, owner: "Dropbox", x: 200)]
-        #expect(MenuBarLayout.manageable(items, excludingPID: 77).map(\.id) == ["theirs"])
+        let items = [item(1, x: 100), item(99, x: 400)]
+        #expect(MenuBarLayout.plausible(items, excluding: [99]).map(\.windowID) == [1])
+    }
+
+    @Test("zero-size placeholder windows are dropped")
+    func placeholdersDropped() {
+        let items = [item(1, x: 100), item(2, x: 200, w: 0, h: 0), item(3, x: 300, w: 2, h: 24)]
+        // Item 2 has no size and item 3 is a 2pt sliver — both are placeholders.
+        #expect(MenuBarLayout.plausible(items).map(\.windowID) == [1])
+    }
+
+    @Test("plausible keeps only real-sized items, in visual order")
+    func plausibleOrdering() {
+        let items = [item(1, x: 100), item(2, x: 500), item(3, x: 300, w: 1, h: 1)]
+        #expect(MenuBarLayout.plausible(items).map(\.windowID) == [2, 1])
     }
 }
 
-@Suite("Grouping by application")
-struct GroupingTests {
+@Suite("Item shape")
+struct ShapeTests {
 
-    @Test("an app owning several items becomes one entry with a count")
-    func multipleItemsCollapse() {
-        let items = [item("d1", pid: 5, owner: "Docker", x: 100),
-                     item("d2", pid: 5, owner: "Docker", x: 140),
-                     item("s1", pid: 6, owner: "Slack", x: 300)]
-        let groups = MenuBarLayout.grouped(items)
-        #expect(groups.count == 2)
-        let docker = groups.first { $0.ownerName == "Docker" }
-        #expect(docker?.count == 2)
-        #expect(groups.first { $0.ownerName == "Slack" }?.count == 1)
+    @Test("a roughly square item reads as an icon")
+    func squareIsIcon() {
+        #expect(!item(1, x: 0, w: 24, h: 24).looksLikeText)
+        #expect(!item(2, x: 0, w: 40, h: 24).looksLikeText)
     }
 
-    @Test("groups are ordered by their rightmost item, matching the bar")
-    func groupOrder() {
-        let items = [item("a", pid: 1, owner: "Alpha", x: 100),
-                     item("z", pid: 2, owner: "Zulu", x: 500)]
-        #expect(MenuBarLayout.grouped(items).map(\.ownerName) == ["Zulu", "Alpha"])
+    @Test("a much wider item reads as a text readout, like a clock")
+    func wideIsText() {
+        #expect(item(3, x: 0, w: 160, h: 24).looksLikeText)
+        #expect(item(4, x: 0, w: 60, h: 24).looksLikeText)
     }
 
-    @Test("a group's primary item is its leftmost, which is what a click targets")
-    func primaryItem() {
-        let group = MenuBarGroup(ownerPID: 5, ownerName: "Docker",
-                                 items: [item("right", pid: 5, owner: "Docker", x: 200),
-                                         item("left", pid: 5, owner: "Docker", x: 100)])
-        #expect(group.primary?.id == "left")
-    }
-
-    @Test("an empty group has no primary rather than crashing")
-    func emptyGroup() {
-        #expect(MenuBarGroup(ownerPID: 1, ownerName: "None", items: []).primary == nil)
+    @Test("a zero-height item does not divide by zero")
+    func degenerate() {
+        #expect(!item(5, x: 0, w: 40, h: 0).looksLikeText)
     }
 }
 
 @Suite("Hiding")
 struct HidingTests {
 
-    let items = [
-        item("far-left",  pid: 1, owner: "A", x: 100),
-        item("mid",       pid: 2, owner: "B", x: 200),
-        item("near-sep",  pid: 3, owner: "C", x: 300),
-        item("right-of",  pid: 4, owner: "D", x: 400),
-    ]
+    let items = [item(1, x: 100), item(2, x: 200), item(3, x: 300), item(4, x: 400)]
 
     @Test("everything left of the separator is what gets hidden")
     func hiddenSet() {
-        // Separator sits at x = 340, so items ending at or before it hide.
-        #expect(MenuBarLayout.hidden(items, leftOfSeparatorX: 340).map(\.id)
-                == ["near-sep", "mid", "far-left"])
+        #expect(MenuBarLayout.hidden(items, leftOfSeparatorX: 340).map(\.windowID) == [3, 2, 1])
     }
 
     @Test("everything right of the separator stays on show")
     func visibleSet() {
-        #expect(MenuBarLayout.alwaysVisible(items, leftOfSeparatorX: 340).map(\.id)
-                == ["right-of"])
+        #expect(MenuBarLayout.alwaysVisible(items, leftOfSeparatorX: 340).map(\.windowID) == [4])
     }
 
     @Test("hidden and visible together account for every item, with no overlap")
@@ -100,7 +79,7 @@ struct HidingTests {
             let hidden = MenuBarLayout.hidden(items, leftOfSeparatorX: x)
             let visible = MenuBarLayout.alwaysVisible(items, leftOfSeparatorX: x)
             #expect(hidden.count + visible.count == items.count, "lost an item at x=\(x)")
-            #expect(Set(hidden.map(\.id)).isDisjoint(with: Set(visible.map(\.id))),
+            #expect(Set(hidden.map(\.windowID)).isDisjoint(with: Set(visible.map(\.windowID))),
                     "an item was both hidden and visible at x=\(x)")
         }
     }
@@ -108,7 +87,6 @@ struct HidingTests {
     @Test("a separator at the far left hides nothing")
     func separatorAtEdge() {
         #expect(MenuBarLayout.hidden(items, leftOfSeparatorX: 0).isEmpty)
-        #expect(MenuBarLayout.alwaysVisible(items, leftOfSeparatorX: 0).count == 4)
     }
 }
 
@@ -116,8 +94,7 @@ struct HidingTests {
 struct ClickTests {
     @Test("the click point is the centre of the item")
     func clickPoint() {
-        let it = MenuBarItem(id: "x", ownerPID: 1, ownerName: "A",
-                             frame: CGRect(x: 100, y: 0, width: 30, height: 24))
+        let it = MenuBarItem(windowID: 1, frame: CGRect(x: 100, y: 0, width: 30, height: 24))
         #expect(it.clickPoint == CGPoint(x: 115, y: 12))
     }
 }

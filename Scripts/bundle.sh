@@ -70,6 +70,11 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <!-- Menu bar agent: no Dock icon, no app switcher entry. -->
     <key>LSUIElement</key>                  <true/>
     <key>NSHumanReadableCopyright</key>     <string>Vellund</string>
+    <!-- Shown in the Screen Recording prompt. macOS draws every status item
+         inside one system process and exposes no API for their images, so
+         photographing the menu bar is the only way to show real icons. -->
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Vellbar photographs a single strip of your menu bar so it can show the real icons in its list. Nothing is written to disk or sent anywhere.</string>
 </dict>
 </plist>
 PLIST

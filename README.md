@@ -15,29 +15,36 @@ Click the chevron to collapse or expand, right-click it for the menu.
 The menu lists what's up there and can click any item for you, even while it's
 hidden.
 
-## The honest bit about icons
+## Permissions, and what each one buys
 
-Vellbar **cannot show you other apps' menu bar icons**, and neither can anything
-else without Screen Recording permission.
+**Hiding works with no permissions at all.** The two below only add to it.
+
+| Permission | What it gets you |
+| --- | --- |
+| Screen Recording | The real icons in the list |
+| Accessibility | Clicking an item from the list to open it |
+
+### Why showing icons needs Screen Recording
 
 Modern macOS renders every status item — third-party ones included — inside the
-ControlCenter process. Ask the window list who owns them and it says
-"ControlCenter" for all of them. There is no API to read another app's status
-item image. That is exactly why Bartender and Ice ask for Screen Recording:
-capturing pixels is the only way to see the icons, and it is fragile across
-macOS releases.
+ControlCenter process. Ask the window list who owns them and it answers
+"ControlCenter" for all of them, and there is no API anywhere to read another
+app's status item image.
 
-Vellbar takes the cheaper route. It reads ControlCenter's Accessibility tree,
-where items usually carry a title or description naming their owner. That needs
-only Accessibility, which is a far smaller ask than recording your screen.
-Where a name isn't available the item still appears, just unnamed.
+Photographing the menu bar is the only route. That is why Bartender and Ice ask
+for the same thing. Vellbar captures **one strip of the menu bar**, crops each
+icon out of it, never writes an image to disk and never sends one anywhere.
 
-**Hiding works with no permissions at all.** Accessibility only improves the
-list.
+Icons are cached, which matters: a hidden item has been pushed off the screen
+and cannot be photographed, so Vellbar captures while the bar is expanded and
+shows the cached icon when it isn't.
+
+macOS only applies a new Screen Recording grant after the app restarts — the
+setup window offers to relaunch for you.
 
 ## Requirements
 
-macOS 14 or later. Accessibility optional.
+macOS 14 or later. Both permissions optional.
 
 ## Building
 

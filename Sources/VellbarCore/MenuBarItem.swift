@@ -3,105 +3,60 @@ import Foundation
 
 /// One icon in the menu bar, as seen from outside the app that owns it.
 ///
-/// macOS exposes a status item's **position and owner** through the window
-/// list, but never its rendered image — there is no API to read another app's
-/// menu bar icon. So Vellbar identifies items by who owns them and shows that
-/// application's own icon instead.
+/// Identified by **window ID**, not by owner. Modern macOS renders every status
+/// item — third-party included — inside the ControlCenter process, so the
+/// window list reports ControlCenter as the owner of all of them. The window ID
+/// is the only thing that distinguishes one item from another, and it is also
+/// what lets each icon be captured individually.
 public struct MenuBarItem: Sendable, Equatable, Identifiable {
-    public let id: String
-    public let ownerPID: Int32
-    public let ownerName: String
+    public let windowID: UInt32
     public let frame: CGRect
+    /// A name, when Accessibility can supply one. Usually it cannot.
+    public let name: String?
 
-    public init(id: String, ownerPID: Int32, ownerName: String, frame: CGRect) {
-        self.id = id
-        self.ownerPID = ownerPID
-        self.ownerName = ownerName
+    public var id: UInt32 { windowID }
+
+    public init(windowID: UInt32, frame: CGRect, name: String? = nil) {
+        self.windowID = windowID
         self.frame = frame
+        self.name = name
     }
 
     /// Where a synthesised click should land to activate this item.
     public var clickPoint: CGPoint {
         CGPoint(x: frame.midX, y: frame.midY)
     }
-}
 
-/// Several items belonging to one application.
-///
-/// Apps commonly own more than one status item, and since their glyphs are
-/// unreadable from outside they would appear as identical rows. Grouping keeps
-/// the list honest: one entry per app, with a count when it owns several.
-public struct MenuBarGroup: Sendable, Equatable, Identifiable {
-    public let ownerPID: Int32
-    public let ownerName: String
-    public let items: [MenuBarItem]
-
-    public var id: Int32 { ownerPID }
-    public var count: Int { items.count }
-
-    /// The leftmost item, which is the one a single click should target.
-    public var primary: MenuBarItem? {
-        items.min { $0.frame.minX < $1.frame.minX }
+    /// Status items are roughly square. Anything much wider is a text readout —
+    /// a clock, a battery percentage, a stock ticker — rather than an icon.
+    public var looksLikeText: Bool {
+        frame.height > 0 && frame.width / frame.height > 2.2
     }
 
-    public init(ownerPID: Int32, ownerName: String, items: [MenuBarItem]) {
-        self.ownerPID = ownerPID
-        self.ownerName = ownerName
-        self.items = items
+    public func withName(_ name: String?) -> MenuBarItem {
+        MenuBarItem(windowID: windowID, frame: frame, name: name)
     }
 }
 
 public enum MenuBarLayout {
 
-    /// Owners whose items are not ours to manage. The clock, Control Center and
-    /// input menus are drawn by the system and cannot be hidden or clicked
-    /// through the way third-party items can.
-    public static let systemOwners: Set<String> = [
-        "Control Center", "ControlCenter",
-        "SystemUIServer",
-        "TextInputMenuAgent", "TextInputSwitcher",
-        "Spotlight",
-        "NotificationCenter",
-        "Window Server", "WindowServer",
-    ]
-
-    public static func isSystemOwned(_ item: MenuBarItem) -> Bool {
-        systemOwners.contains(item.ownerName)
-    }
-
-    /// Menu bar items read right to left: the rightmost is closest to the
-    /// clock. Sorting descending by x gives the order a person sees.
+    /// Menu bar items read right to left: the rightmost sits nearest the clock.
+    /// Sorting descending by x gives the order a person sees.
     public static func inVisualOrder(_ items: [MenuBarItem]) -> [MenuBarItem] {
         items.sorted { $0.frame.minX > $1.frame.minX }
     }
 
-    /// Third-party items only, in visual order, excluding our own.
-    public static func manageable(_ items: [MenuBarItem],
-                                  excludingPID ownPID: Int32) -> [MenuBarItem] {
-        inVisualOrder(items.filter { $0.ownerPID != ownPID && !isSystemOwned($0) })
+    /// Drops items that are ours, and any that are implausibly small — macOS
+    /// keeps zero-width placeholder windows at the status level.
+    public static func plausible(_ items: [MenuBarItem],
+                                 excluding ownIDs: Set<UInt32> = []) -> [MenuBarItem] {
+        inVisualOrder(items.filter {
+            !ownIDs.contains($0.windowID) && $0.frame.width >= 8 && $0.frame.height >= 8
+        })
     }
 
-    /// One entry per owning application, ordered by each app's rightmost item
-    /// so the list matches what the eye sees.
-    public static func grouped(_ items: [MenuBarItem]) -> [MenuBarGroup] {
-        var byOwner: [Int32: [MenuBarItem]] = [:]
-        for item in items { byOwner[item.ownerPID, default: []].append(item) }
-
-        return byOwner
-            .map { pid, group in
-                MenuBarGroup(ownerPID: pid,
-                             ownerName: group[0].ownerName,
-                             items: inVisualOrder(group))
-            }
-            .sorted { a, b in
-                let ax = a.items.first?.frame.minX ?? 0
-                let bx = b.items.first?.frame.minX ?? 0
-                return ax > bx
-            }
-    }
-
-    /// Items that fall to the left of the separator, and are therefore the ones
-    /// pushed off-screen when Vellbar collapses.
+    /// Items to the left of the separator — the ones pushed off-screen when
+    /// Vellbar collapses.
     public static func hidden(_ items: [MenuBarItem],
                               leftOfSeparatorX x: CGFloat) -> [MenuBarItem] {
         inVisualOrder(items.filter { $0.frame.maxX <= x })

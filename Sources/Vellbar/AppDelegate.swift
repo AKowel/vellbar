@@ -7,16 +7,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var separator: SeparatorController?
     private var onboarding: OnboardingWindowController?
+    private let icons = IconCapture()
+    private var refreshTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         let controller = SeparatorController()
         controller.buildMenu = { [weak self] in self?.menu() ?? NSMenu() }
         separator = controller
 
-        if !AccessibilityPermission.isTrusted {
-            // Hiding works without it. Only naming what's hidden needs it, so
-            // this is an invitation rather than a wall.
+        startCapturing()
+
+        if !ScreenRecordingPermission.isGranted {
             showOnboarding()
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        refreshTask?.cancel()
+    }
+
+    /// Photograph the bar while it is expanded, so hidden items still have an
+    /// icon to show. An item that has been pushed off-screen cannot be
+    /// captured, so the cache is the only way its icon survives collapsing.
+    private func startCapturing() {
+        refreshTask?.cancel()
+        refreshTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                if self.separator?.isCollapsed == false {
+                    await self.icons.refresh(items: MenuBarScanner.scan())
+                }
+                try? await Task.sleep(for: .seconds(2))
+            }
         }
     }
 
@@ -26,32 +48,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         let items = MenuBarScanner.scan()
 
-        if items.isEmpty {
-            let count = MenuBarScanner.positions().count
-            addReadout(menu, AccessibilityPermission.isTrusted
-                ? "Couldn't read item names on this macOS"
-                : "Grant Accessibility to list items by name")
-            addReadout(menu, "\(count) menu bar item\(count == 1 ? "" : "s") detected")
-
-            if !AccessibilityPermission.isTrusted {
-                let grant = NSMenuItem(title: "Grant Access…",
-                                       action: #selector(showOnboarding), keyEquivalent: "")
-                grant.target = self
-                menu.addItem(grant)
-            }
+        if !ScreenRecordingPermission.isGranted {
+            addReadout(menu, "\(items.count) menu bar item\(items.count == 1 ? "" : "s")")
+            addReadout(menu, "Allow Screen Recording to see their icons")
+            let grant = NSMenuItem(title: "Set up icons…",
+                                   action: #selector(showOnboarding), keyEquivalent: "")
+            grant.target = self
+            menu.addItem(grant)
+        } else if items.isEmpty {
+            addReadout(menu, "No menu bar items found")
         } else {
             addReadout(menu, "Menu bar items")
-            for group in MenuBarLayout.grouped(items) {
-                let title = group.count > 1
-                    ? "\(group.ownerName)  (\(group.count))"
-                    : group.ownerName
-                let item = NSMenuItem(title: title,
-                                      action: #selector(activate(_:)), keyEquivalent: "")
-                item.target = self
-                if let primary = group.primary {
-                    item.representedObject = NSValue(point: primary.clickPoint)
+            for (index, item) in items.enumerated() {
+                let row = NSMenuItem(title: title(for: item, index: index),
+                                     action: #selector(activate(_:)), keyEquivalent: "")
+                row.target = self
+                row.representedObject = NSValue(point: item.clickPoint)
+                if let icon = icons.image(for: item.windowID) {
+                    icon.size = NSSize(width: 18, height: 18)
+                    row.image = icon
                 }
-                menu.addItem(item)
+                menu.addItem(row)
             }
         }
 
@@ -88,6 +105,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
+    /// The icon carries the identity, so the label only has to disambiguate.
+    /// A captured picture of a status item tells you what it is far better than
+    /// any name macOS is willing to give us.
+    private func title(for item: MenuBarItem, index: Int) -> String {
+        if let name = item.name, !name.isEmpty { return name }
+        return item.looksLikeText ? "Text item \(index + 1)" : "Item \(index + 1)"
+    }
+
     private func addReadout(_ menu: NSMenu, _ title: String) {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
         item.isEnabled = false
@@ -99,7 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func activate(_ sender: NSMenuItem) {
         guard let value = sender.representedObject as? NSValue else { return }
         let point = value.pointValue
-        // The item may currently be pushed off-screen, so reveal, click, restore.
+        // The item may be pushed off-screen right now, so reveal, click, restore.
         separator?.revealing {
             ItemActivator.click(at: CGPoint(x: point.x, y: point.y))
         }
@@ -108,6 +133,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleCollapse() {
         guard let separator else { return }
         separator.setCollapsed(!separator.isCollapsed)
+        if !separator.isCollapsed {
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(250))
+                await icons.refresh(items: MenuBarScanner.scan(), force: true)
+            }
+        }
     }
 
     @objc private func showHelp() {
@@ -120,7 +151,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             left of it is hidden when you collapse; everything to the right \
             always stays on show.
 
-            Click the chevron to collapse or expand. Right-click it for this menu.
+            Click the chevron to collapse or expand. Right-click it for the list \
+            of items, and click any of them to open it — even while it's hidden.
             """
         alert.addButton(withTitle: "Got it")
         NSApp.activate(ignoringOtherApps: true)
@@ -151,6 +183,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             onboarding = OnboardingWindowController { [weak self] in
                 self?.onboarding?.close()
                 self?.onboarding = nil
+                self?.startCapturing()
             }
         }
         onboarding?.showWindow(nil)
