@@ -20,6 +20,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !ScreenRecordingPermission.isGranted {
             showOnboarding()
         }
+
+        // Explain the drag once. Without it the app looks broken on first run:
+        // it adds two icons and appears to do nothing, because macOS put the
+        // divider where it hides nothing.
+        if !UserDefaults.standard.bool(forKey: "vellbar.sawSetup") {
+            UserDefaults.standard.set(true, forKey: "vellbar.sawSetup")
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(600))
+                self.showHelp()
+            }
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -48,15 +59,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         let items = MenuBarScanner.scan()
 
-        if !ScreenRecordingPermission.isGranted {
+        if !AccessibilityPermission.isTrusted {
+            // Not optional: the window list does not expose third-party status
+            // items at all, so Accessibility is the only way to find them.
+            addReadout(menu, "Accessibility access required")
+            addReadout(menu, "macOS won't list menu bar items without it")
+            let grant = NSMenuItem(title: "Set up…",
+                                   action: #selector(showOnboarding), keyEquivalent: "")
+            grant.target = self
+            menu.addItem(grant)
+        } else if items.isEmpty {
+            addReadout(menu, "Couldn't read the menu bar on this macOS")
+            let grant = NSMenuItem(title: "Set up…",
+                                   action: #selector(showOnboarding), keyEquivalent: "")
+            grant.target = self
+            menu.addItem(grant)
+        } else if !ScreenRecordingPermission.isGranted {
             addReadout(menu, "\(items.count) menu bar item\(items.count == 1 ? "" : "s")")
             addReadout(menu, "Allow Screen Recording to see their icons")
             let grant = NSMenuItem(title: "Set up icons…",
                                    action: #selector(showOnboarding), keyEquivalent: "")
             grant.target = self
             menu.addItem(grant)
-        } else if items.isEmpty {
+            menu.addItem(.separator())
+            for (index, item) in items.enumerated() {
+                let row = NSMenuItem(title: title(for: item, index: index),
+                                     action: #selector(activate(_:)), keyEquivalent: "")
+                row.target = self
+                row.representedObject = NSValue(point: item.clickPoint)
+                menu.addItem(row)
+            }
+        } else if false {
             addReadout(menu, "No menu bar items found")
+        } else if separator?.wouldHideNothing == true {
+            // The single most common state on first launch, and previously the
+            // app just sat there looking broken.
+            addReadout(menu, "Nothing is set to hide yet")
+            let setup = NSMenuItem(title: "Set up hiding…",
+                                   action: #selector(showHelp), keyEquivalent: "")
+            setup.target = self
+            menu.addItem(setup)
+            menu.addItem(.separator())
+            addReadout(menu, "\(items.count) menu bar items")
+            for (index, item) in items.enumerated() {
+                let row = NSMenuItem(title: title(for: item, index: index),
+                                     action: #selector(activate(_:)), keyEquivalent: "")
+                row.target = self
+                row.representedObject = NSValue(point: item.clickPoint)
+                if let icon = icons.image(for: item.windowID) {
+                    icon.size = NSSize(width: 18, height: 18)
+                    row.image = icon
+                }
+                menu.addItem(row)
+            }
         } else {
             addReadout(menu, "Menu bar items")
             for (index, item) in items.enumerated() {
@@ -143,16 +198,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showHelp() {
         let alert = NSAlert()
-        alert.messageText = "Choosing what Vellbar hides"
+        alert.messageText = "One drag, and you're set up"
         alert.informativeText = """
-            Vellbar adds two icons: a chevron, and a divider.
+            macOS drops new menu bar icons at the far left and gives apps no way \
+            to move themselves — so Vellbar needs one drag from you. Every app \
+            that does this works the same way.
 
-            Hold ⌘ and drag the divider along the menu bar. Everything to the \
-            left of it is hidden when you collapse; everything to the right \
-            always stays on show.
+            1.  Find Vellbar's divider (the small ☰ icon).
+            2.  Hold ⌘ and drag it to the RIGHT, past every icon you want hidden.
+            3.  Click the chevron to collapse.
 
-            Click the chevron to collapse or expand. Right-click it for the list \
-            of items, and click any of them to open it — even while it's hidden.
+            Everything to the left of the divider hides. Everything to the right \
+            stays on show. Right-click the chevron any time for the full list — \
+            you can open any item from there, even while it's hidden.
             """
         alert.addButton(withTitle: "Got it")
         NSApp.activate(ignoringOtherApps: true)

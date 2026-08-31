@@ -79,6 +79,24 @@ final class SeparatorController {
 
     func setCollapsed(_ collapsed: Bool) { isCollapsed = collapsed }
 
+    /// Where the divider currently sits, in screen coordinates.
+    ///
+    /// Needed because an app cannot position its own status item — macOS drops
+    /// new ones at the left end and only a ⌘-drag moves them. Knowing where the
+    /// divider ended up is the only way to tell the user whether collapsing
+    /// would actually hide anything.
+    var separatorX: CGFloat? {
+        guard let window = separator.button?.window else { return nil }
+        return window.frame.minX
+    }
+
+    /// True when the divider is so far left that collapsing achieves nothing —
+    /// which is exactly where macOS puts it on first launch.
+    var wouldHideNothing: Bool {
+        guard let x = separatorX else { return true }
+        return !MenuBarScanner.scan().contains { $0.frame.maxX <= x }
+    }
+
     /// Reveal briefly, run something, then restore — used when activating an
     /// item that is currently pushed off-screen.
     func revealing(_ work: @escaping @MainActor () -> Void) {
